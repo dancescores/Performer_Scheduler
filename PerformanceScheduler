@@ -1,0 +1,188 @@
+/**
+ * Main function to schedule performances with multiple variations
+ * @param {number} maxInRow - Maximum consecutive dances (default: 1)
+ * @param {number} variations - Number of schedules to generate (default: 3)
+ */
+function schedulePerformances(maxInRow = 1, variations = 3) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Try to find input sheet with better error handling
+  let inputSheet = ss.getSheetByName('Dance Schedule Input');
+  if (!inputSheet) {
+    // If not found, try active sheet
+    inputSheet = ss.getActiveSheet();
+    if (!inputSheet) {
+      throw new Error("No input sheet found. Please create a 'Dance Schedule Input' sheet or select a sheet with your data.");
+    }
+  }
+  
+  // Verify input sheet has data
+  if (inputSheet.getLastRow() < 2) {
+    throw new Error("Input sheet must contain at least one dance (header row + data)");
+  }
+
+  // Clear old output sheets and create new ones
+  const outputSheets = [];
+  for (let i = 1; i <= variations; i++) {
+    const sheetName = `Dance Schedule ${i}`;
+    let outputSheet = ss.getSheetByName(sheetName);
+    
+    if (outputSheet) {
+      outputSheet.clear();
+    } else {
+      outputSheet = ss.insertSheet(sheetName);
+    }
+    outputSheets.push(outputSheet);
+  }
+
+  try {
+    const { dances, allDancers } = getInputData(inputSheet);
+    
+    // Generate variations
+    for (let v = 1; v <= variations; v++) {
+      generateScheduleVariation(v, dances, allDancers, maxInRow, ss);
+    }
+    
+    // Create comparison sheet
+    createComparisonSheet(ss, variations);
+    
+    SpreadsheetApp.getUi().alert(`Successfully generated ${variations} schedule variations!`);
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('Error: ' + e.message);
+    throw e;
+  }
+}
+
+function generateScheduleVariation(variationNum, dances, allDancers, maxInRow, ss) {
+  const outputSheet = ss.getSheetByName(`Dance Schedule ${variationNum}`);
+  if (!outputSheet) {
+    throw new Error(`Could not create output sheet for variation ${variationNum}`);
+  }
+  
+  // Set up headers
+  outputSheet.getRange(1, 1, 1, 3).setValues([['Order', 'Dance Name', 'Warnings']]);
+  
+  // Separate dances by constraints
+  const firstDances = dances.filter(d => d.constraint === 'first');
+  const lastDances = dances.filter(d => d.constraint === 'last');
+  let middleDances = dances.filter(d => !d.constraint || (d.constraint !== 'first' && d.constraint !== 'last'));
+  
+  // Shuffle middle dances differently for each variation
+  middleDances = shuffleArray(middleDances, variationNum);
+  
+  // Schedule dances
+  const scheduledDances = [];
+  const warnings = [];
+  
+  // Add first dances
+  scheduledDances.push(...firstDances);
+  
+  // Schedule middle dances with different approaches per variation
+  const remainingDances = [...middleDances];
+  
+  while (remainingDances.length > 0) {
+    let nextDanceIndex = findNextDanceIndex(remainingDances, scheduledDances, allDancers, maxInRow, variationNum);
+    
+    if (nextDanceIndex === -1) nextDanceIndex = 0; // Fallback
+    
+    const [nextDance] = remainingDances.splice(nextDanceIndex, 1);
+    scheduledDances.push(nextDance);
+    
+    // Check for violations
+    const violation = checkViolation(nextDance, scheduledDances, allDancers, maxInRow);
+    if (violation) {
+      warnings.push({
+        dance: nextDance.name,
+        message: violation
+      });
+    }
+  }
+  
+  // Add last dances
+  scheduledDances.push(...lastDances);
+  
+  // Prepare output
+  const outputData = scheduledDances.map((dance, index) => [
+    index + 1,
+    dance.name,
+    warnings.find(w => w.dance === dance.name)?.message || ''
+  ]);
+  
+  // Write output
+  if (outputData.length > 0) {
+    outputSheet.getRange(2, 1, outputData.length, 3).setValues(outputData);
+  }
+  
+  // Add summary
+  const summaryRow = outputData.length + 3;
+  outputSheet.getRange(summaryRow, 1).setValue(`Schedule Variation ${variationNum}`);
+  outputSheet.getRange(summaryRow + 1, 1).setValue(`Total Warnings: ${warnings.length}`);
+  outputSheet.getRange(summaryRow + 2, 1).setValue(`Violation Score: ${calculateViolationScore(scheduledDances, allDancers, maxInRow)}`);
+  
+  // Formatting
+  outputSheet.autoResizeColumns(1, 3);
+  outputSheet.getRange(1, 1, 1, 3).setBackground('#dddddd').setFontWeight('bold');
+}
+
+function getInputData(inputSheet) {
+  // Verify sheet access
+  if (!inputSheet || !inputSheet.getDataRange) {
+    throw new Error("Invalid sheet reference. Please check your sheet name and permissions.");
+  }
+
+  const inputRange = inputSheet.getDataRange();
+  const inputData = inputRange.getValues();
+  const headers = inputData[0].map(h => h.toString().toLowerCase().trim());
+  
+  // Find column indices with fallbacks
+  const nameIndex = headers.includes('dance name') ? 
+    headers.indexOf('dance name') : 0;
+  const dancersIndex = headers.includes('dancers') ? 
+    headers.indexOf('dancers') : 1;
+  const constraintsIndex = headers.includes('constraints') ? 
+    headers.indexOf('constraints') : -1;
+
+  const dances = [];
+  const allDancers = new Set();
+  
+  for (let i = 1; i < inputData.length; i++) {
+    const row = inputData[i];
+    // Skip empty rows
+    if (!row[nameIndex] && !row[dancersIndex]) continue;
+    
+    try {
+      const danceName = row[nameIndex] ? row[nameIndex].toString().trim() : `Dance ${i}`;
+      const dancers = row[dancersIndex] ? 
+        row[dancersIndex].toString().split(',').map(d => d.trim()).filter(d => d) : 
+        [];
+      const constraint = constraintsIndex >= 0 && row[constraintsIndex] ? 
+        row[constraintsIndex].toString().toLowerCase().trim() : '';
+      
+      dances.push({
+        name: danceName,
+        dancers: dancers,
+        constraint: constraint
+      });
+      
+      dancers.forEach(dancer => {
+        if (dancer.toLowerCase() !== 'all') {
+          allDancers.add(dancer);
+        }
+      });
+    } catch (e) {
+      console.warn(`Error processing row ${i+1}: ${e}`);
+    }
+  }
+  
+  if (dances.length === 0) {
+    throw new Error('No valid dances found in input sheet');
+  }
+  
+  return { dances, allDancers };
+}
+
+// [Rest of your helper functions remain exactly the same]
+// shuffleArray, findNextDanceIndex, calculateDanceScore, 
+// getCommonDancers, getDancerList, checkViolation,
+// calculateViolationScore, createComparisonSheet, 
+// calculateViolationScoreFromNames
