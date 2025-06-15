@@ -10,7 +10,7 @@ Dance Name	|  Dancers	|  Constraints
 
 Open code editor: Google Sheets > Extensions > Apps Script
 
-Delete all text in code writer, then copy and paste the code from ".txt"
+Delete all text in code writer, then copy and paste the code from "PerformanceScheduler"
 
 Save and Run. Google may ask you for permissions, allow all.
 
