@@ -30,3 +30,5 @@ May take a while depending on the number of variables. 13 dancers among 11 dance
 
 Reminder: If you do not code, you should always check random internet script through a friend or ai.
 
+Author
+Jake Bradnock, 2025
