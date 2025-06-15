@@ -19,11 +19,12 @@ May take a while depending on the number of variables. 13 dancers among 11 dance
 
 3 different running orders should be generated in a tab of your "Dance Performance Schedule" sheet, along with any clashes.
 
-Note: Constraints field takes the inputs "first" and "last". If not either then leave the field blank.
-Remember: If you do not code, you should always check random internet script through an ai.
-
 *
 Performance name = the title of this show/section.
 Performers = the names of the performers involved, each separated by a comma.  eg. Alice,Bob,Claire,David
 Constraints = only takes "first" or "last", optional, can be left blank.
 Spacing = ideal minimum number of performances until a performer must return.
+
+
+Reminder: If you do not code, you should always check random internet script through a friend or ai.
+
