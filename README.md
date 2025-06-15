@@ -15,7 +15,7 @@ NOTE: The order of these columns shouldn't matter, but must be named as above.
 
 -Delete all text in code writer, then copy and paste the code from "PerformanceScheduler"
 
--Save and Run. Google may ask you for permissions, allow all. May throw errors from undefined column data.
+-Save and Run. Google may ask you for permissions, allow all. May throw errors from undefined column data. This is fine.
 
 May take a while depending on the number of variables. 13 dancers among 11 dances took around 3 seconds to generate once error messages are closed.
 
