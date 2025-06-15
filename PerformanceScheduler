@@ -1,188 +1,287 @@
 /**
  * Main function to schedule performances with multiple variations
- * @param {number} maxInRow - Maximum consecutive dances (default: 1)
+ * @param {number} maxInRow - Maximum consecutive performances (default: 1)
  * @param {number} variations - Number of schedules to generate (default: 3)
  */
 function schedulePerformances(maxInRow = 1, variations = 3) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
   
-  // Try to find input sheet with better error handling
-  let inputSheet = ss.getSheetByName('Dance Schedule Input');
+  let inputSheet = ss.getSheetByName('Performer Schedule Input');
   if (!inputSheet) {
-    // If not found, try active sheet
     inputSheet = ss.getActiveSheet();
     if (!inputSheet) {
-      throw new Error("No input sheet found. Please create a 'Dance Schedule Input' sheet or select a sheet with your data.");
+      ui.alert('Error', 'Please create a sheet named "Performer Schedule Input" or select your data sheet before running.', ui.ButtonSet.OK);
+      return;
     }
-  }
-  
-  // Verify input sheet has data
-  if (inputSheet.getLastRow() < 2) {
-    throw new Error("Input sheet must contain at least one dance (header row + data)");
-  }
-
-  // Clear old output sheets and create new ones
-  const outputSheets = [];
-  for (let i = 1; i <= variations; i++) {
-    const sheetName = `Dance Schedule ${i}`;
-    let outputSheet = ss.getSheetByName(sheetName);
-    
-    if (outputSheet) {
-      outputSheet.clear();
-    } else {
-      outputSheet = ss.insertSheet(sheetName);
-    }
-    outputSheets.push(outputSheet);
+    ui.alert('Notice', 'Using active sheet since "Performer Schedule Input" not found', ui.ButtonSet.OK);
   }
 
   try {
-    const { dances, allDancers } = getInputData(inputSheet);
-    
-    // Generate variations
-    for (let v = 1; v <= variations; v++) {
-      generateScheduleVariation(v, dances, allDancers, maxInRow, ss);
+    if (inputSheet.getLastRow() < 2) {
+      throw new Error('Input sheet must contain at least one dance (header row + data)');
     }
-    
-    // Create comparison sheet
+
+    const { performances, allPerformers } = getInputData(inputSheet);
+
+    for (let v = 1; v <= variations; v++) {
+      const sheetName = `Performance Schedule ${v}`;
+      let outputSheet = ss.getSheetByName(sheetName);
+      if (outputSheet) ss.deleteSheet(outputSheet);
+      outputSheet = ss.insertSheet(sheetName);
+      generateScheduleVariation(v, performances, allPerformers, maxInRow, ss);
+    }
+
     createComparisonSheet(ss, variations);
-    
-    SpreadsheetApp.getUi().alert(`Successfully generated ${variations} schedule variations!`);
+    ui.alert('Success', `Generated ${variations} schedule variations!`, ui.ButtonSet.OK);
+
   } catch (e) {
-    SpreadsheetApp.getUi().alert('Error: ' + e.message);
-    throw e;
+    ui.alert('Error', e.message, ui.ButtonSet.OK);
+    console.error(e);
   }
 }
 
-function generateScheduleVariation(variationNum, dances, allDancers, maxInRow, ss) {
-  const outputSheet = ss.getSheetByName(`Dance Schedule ${variationNum}`);
+function generateScheduleVariation(variationNum, performances, allPerformers, maxInRow, ss) {
+  const outputSheet = ss.getSheetByName(`Performance Schedule ${variationNum}`);
   if (!outputSheet) {
     throw new Error(`Could not create output sheet for variation ${variationNum}`);
   }
+
+  outputSheet.getRange(1, 1, 1, 3).setValues([['Order', 'Performance Name', 'Warnings']]);
+
+  const first = performances.filter(p => p.constraint === 'first');
+  const last = performances.filter(p => p.constraint === 'last');
+  let middle = performances.filter(p => !p.constraint || (p.constraint !== 'first' && p.constraint !== 'last'));
   
-  // Set up headers
-  outputSheet.getRange(1, 1, 1, 3).setValues([['Order', 'Dance Name', 'Warnings']]);
-  
-  // Separate dances by constraints
-  const firstDances = dances.filter(d => d.constraint === 'first');
-  const lastDances = dances.filter(d => d.constraint === 'last');
-  let middleDances = dances.filter(d => !d.constraint || (d.constraint !== 'first' && d.constraint !== 'last'));
-  
-  // Shuffle middle dances differently for each variation
-  middleDances = shuffleArray(middleDances, variationNum);
-  
-  // Schedule dances
-  const scheduledDances = [];
+  middle = shuffleArray(middle, variationNum);
+  const scheduled = [...first];
   const warnings = [];
-  
-  // Add first dances
-  scheduledDances.push(...firstDances);
-  
-  // Schedule middle dances with different approaches per variation
-  const remainingDances = [...middleDances];
-  
-  while (remainingDances.length > 0) {
-    let nextDanceIndex = findNextDanceIndex(remainingDances, scheduledDances, allDancers, maxInRow, variationNum);
+
+  const remaining = [...middle];
+  while (remaining.length > 0) {
+    let idx = findNextPerformanceIndex(remaining, scheduled, allPerformers, maxInRow, variationNum);
+    if (idx === -1) idx = 0;
     
-    if (nextDanceIndex === -1) nextDanceIndex = 0; // Fallback
-    
-    const [nextDance] = remainingDances.splice(nextDanceIndex, 1);
-    scheduledDances.push(nextDance);
-    
-    // Check for violations
-    const violation = checkViolation(nextDance, scheduledDances, allDancers, maxInRow);
-    if (violation) {
-      warnings.push({
-        dance: nextDance.name,
-        message: violation
-      });
+    const [next] = remaining.splice(idx, 1);
+    scheduled.push(next);
+
+    const warning = checkViolation(next, scheduled, allPerformers, maxInRow);
+    if (warning) {
+      warnings.push({ performance: next.name, message: warning });
     }
   }
-  
-  // Add last dances
-  scheduledDances.push(...lastDances);
-  
-  // Prepare output
-  const outputData = scheduledDances.map((dance, index) => [
-    index + 1,
-    dance.name,
-    warnings.find(w => w.dance === dance.name)?.message || ''
+
+  scheduled.push(...last);
+
+  const outputData = scheduled.map((p, i) => [
+    i + 1,
+    p.name,
+    warnings.find(w => w.performance === p.name)?.message || ''
   ]);
-  
-  // Write output
-  if (outputData.length > 0) {
+
+  if (outputData.length) {
     outputSheet.getRange(2, 1, outputData.length, 3).setValues(outputData);
   }
-  
-  // Add summary
-  const summaryRow = outputData.length + 3;
-  outputSheet.getRange(summaryRow, 1).setValue(`Schedule Variation ${variationNum}`);
-  outputSheet.getRange(summaryRow + 1, 1).setValue(`Total Warnings: ${warnings.length}`);
-  outputSheet.getRange(summaryRow + 2, 1).setValue(`Violation Score: ${calculateViolationScore(scheduledDances, allDancers, maxInRow)}`);
-  
-  // Formatting
+
+  const row = outputData.length + 3;
+  outputSheet.getRange(row, 1).setValue(`Schedule Variation ${variationNum}`);
+  outputSheet.getRange(row + 1, 1).setValue(`Total Warnings: ${warnings.length}`);
+  outputSheet.getRange(row + 2, 1).setValue(`Violation Score: ${calculateViolationScore(scheduled, allPerformers, maxInRow)}`);
+
   outputSheet.autoResizeColumns(1, 3);
   outputSheet.getRange(1, 1, 1, 3).setBackground('#dddddd').setFontWeight('bold');
 }
 
 function getInputData(inputSheet) {
-  // Verify sheet access
-  if (!inputSheet || !inputSheet.getDataRange) {
-    throw new Error("Invalid sheet reference. Please check your sheet name and permissions.");
-  }
-
   const inputRange = inputSheet.getDataRange();
   const inputData = inputRange.getValues();
   const headers = inputData[0].map(h => h.toString().toLowerCase().trim());
-  
-  // Find column indices with fallbacks
-  const nameIndex = headers.includes('dance name') ? 
-    headers.indexOf('dance name') : 0;
-  const dancersIndex = headers.includes('dancers') ? 
-    headers.indexOf('dancers') : 1;
-  const constraintsIndex = headers.includes('constraints') ? 
-    headers.indexOf('constraints') : -1;
 
-  const dances = [];
-  const allDancers = new Set();
+  const nameIndex = headers.includes('performance name') ? headers.indexOf('performance name') : 0;
+  const performersIndex = headers.includes('performers') ? headers.indexOf('performers') : 1;
+  const constraintsIndex = headers.includes('constraints') ? headers.indexOf('constraints') : -1;
+  const spacingIndex = headers.includes('minimum spacing') ? headers.indexOf('minimum spacing') : -1;
+
+  const performances = [];
+  const allPerformers = new Set();
   
   for (let i = 1; i < inputData.length; i++) {
     const row = inputData[i];
-    // Skip empty rows
-    if (!row[nameIndex] && !row[dancersIndex]) continue;
-    
+    if (!row[nameIndex] && !row[performersIndex]) continue;
+
     try {
-      const danceName = row[nameIndex] ? row[nameIndex].toString().trim() : `Dance ${i}`;
-      const dancers = row[dancersIndex] ? 
-        row[dancersIndex].toString().split(',').map(d => d.trim()).filter(d => d) : 
-        [];
-      const constraint = constraintsIndex >= 0 && row[constraintsIndex] ? 
-        row[constraintsIndex].toString().toLowerCase().trim() : '';
-      
-      dances.push({
-        name: danceName,
-        dancers: dancers,
-        constraint: constraint
-      });
-      
-      dancers.forEach(dancer => {
-        if (dancer.toLowerCase() !== 'all') {
-          allDancers.add(dancer);
+      const name = row[nameIndex] ? row[nameIndex].toString().trim() : `Performance ${i}`;
+      const performers = row[performersIndex] ? row[performersIndex].toString().split(',').map(p => p.trim()).filter(p => p) : [];
+      const constraint = constraintsIndex >= 0 && row[constraintsIndex] ? row[constraintsIndex].toString().toLowerCase().trim() : '';
+      const spacing = spacingIndex >= 0 && !isNaN(row[spacingIndex]) ? parseInt(row[spacingIndex], 10) : 1;
+
+      performances.push({ name, performers, constraint, spacing });
+      performers.forEach(p => {
+        if (p.toLowerCase() !== 'all') {
+          allPerformers.add(p);
         }
       });
     } catch (e) {
-      console.warn(`Error processing row ${i+1}: ${e}`);
+      console.warn(`Error processing row ${i + 1}: ${e}`);
     }
   }
-  
-  if (dances.length === 0) {
-    throw new Error('No valid dances found in input sheet');
+
+  if (performances.length === 0) {
+    throw new Error('No valid performances found in input sheet');
   }
-  
-  return { dances, allDancers };
+
+  return { performances, allPerformers };
 }
 
-// [Rest of your helper functions remain exactly the same]
-// shuffleArray, findNextDanceIndex, calculateDanceScore, 
-// getCommonDancers, getDancerList, checkViolation,
-// calculateViolationScore, createComparisonSheet, 
-// calculateViolationScoreFromNames
+function shuffleArray(array, seed) {
+  const shuffled = [...array];
+  let random = Math.sin(seed) * 10000 % 1;
+  
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(random * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    random = Math.sin(random) * 10000 % 1;
+  }
+  return shuffled;
+}
+
+function findNextPerformanceIndex(performances, scheduled, allPerformers, maxInRow, variationNum) {
+  if (!performances.length) return -1;
+
+  switch (variationNum % 3) {
+    case 1:
+      return performances.map((p, i) => ({ i, score: calculateScore(p, scheduled, allPerformers, maxInRow) }))
+        .sort((a, b) => b.score - a.score)[0].i;
+
+    case 2:
+      const scores = performances.map(p => Math.max(1, calculateScore(p, scheduled, allPerformers, maxInRow) + 2));
+      const total = scores.reduce((a, b) => a + b, 0);
+      let rand = Math.random() * total;
+      for (let i = 0, sum = 0; i < scores.length; i++) {
+        sum += scores[i];
+        if (rand <= sum) return i;
+      }
+      return 0;
+
+    default:
+      const top3 = performances.map((p, i) => ({ i, score: calculateScore(p, scheduled, allPerformers, maxInRow) }))
+        .sort((a, b) => b.score - a.score).slice(0, 3);
+      return top3[Math.floor(Math.random() * top3.length)].i;
+  }
+}
+
+function calculateScore(performance, scheduled, allPerformers, maxInRow) {
+  if (!scheduled.length) return 0;
+  const last = scheduled[scheduled.length - 1];
+  const common = getCommonPerformers(performance, last, allPerformers);
+  return -common.length;
+}
+
+function getCommonPerformers(p1, p2, allPerformers) {
+  const list1 = getPerformerList(p1.performers, allPerformers);
+  const list2 = getPerformerList(p2.performers, allPerformers);
+  return list1.filter(p => list2.includes(p));
+}
+
+function getPerformerList(performers, allPerformers) {
+  return performers.includes('All') ? Array.from(allPerformers) : performers;
+}
+
+function checkViolation(performance, scheduled, allPerformers) {
+  const spacing = performance.spacing || 1;
+  if (scheduled.length <= spacing) return null;
+
+  const recent = scheduled.slice(-(spacing + 1));
+  const allRecent = new Set();
+  
+  recent.forEach(p => {
+    getPerformerList(p.performers, allPerformers).forEach(pr => allRecent.add(pr));
+  });
+
+  const violations = [];
+  allRecent.forEach(p => {
+    let count = 0;
+    recent.forEach(r => {
+      if (getPerformerList(r.performers, allPerformers).includes(p)) {
+        count++;
+      }
+    });
+    if (count > 1) {
+      violations.push(p);
+    }
+  });
+
+  return violations.length > 0
+    ? `Performer(s) ${violations.join(', ')} appear within ${spacing} dances`
+    : null;
+}
+
+function calculateViolationScore(scheduled, allPerformers) {
+  let score = 0;
+
+  for (let i = 0; i < scheduled.length; i++) {
+    const current = scheduled[i];
+    const spacing = current.spacing || 1;
+    const windowStart = Math.max(0, i - spacing);
+    const window = scheduled.slice(windowStart, i + 1);
+
+    const allRecent = new Set();
+    window.forEach(p => {
+      getPerformerList(p.performers, allPerformers).forEach(pr => allRecent.add(pr));
+    });
+
+    allRecent.forEach(p => {
+      let count = 0;
+      window.forEach(r => {
+        if (getPerformerList(r.performers, allPerformers).includes(p)) {
+          count++;
+        }
+      });
+      if (count > 1) {
+        score += (count - 1) * 10;
+      }
+    });
+  }
+
+  return score;
+}
+
+function createComparisonSheet(ss, variations) {
+  let sheet = ss.getSheetByName('Schedule Comparison');
+  if (!sheet) sheet = ss.insertSheet('Schedule Comparison');
+  else sheet.clear();
+
+  sheet.getRange(1, 1).setValue('Comparison of Schedule Variations');
+  const headers = ['Variation', 'Total Warnings', 'Violation Score', 'First 3 Performances', 'Last 3 Performances'];
+  sheet.getRange(3, 1, 1, headers.length).setValues([headers]).setBackground('#dddddd').setFontWeight('bold');
+
+  const data = [];
+
+  for (let v = 1; v <= variations; v++) {
+    const s = ss.getSheetByName(`Performance Schedule ${v}`);
+    if (!s) continue;
+
+    const vals = s.getDataRange().getValues();
+    const names = vals.slice(1).map(r => r[1]).filter(n => n);
+    const warningCount = vals.slice(1).filter(r => r[2]).length;
+    const score = calculateViolationScoreFromNames(names, ss);
+
+    data.push([v, warningCount, score, names.slice(0, 3).join(', '), names.slice(-3).join(', ')]);
+  }
+
+  if (data.length) {
+    sheet.getRange(4, 1, data.length, data[0].length).setValues(data);
+    sheet.autoResizeColumns(1, headers.length);
+  }
+}
+
+function calculateViolationScoreFromNames(performanceNames, ss) {
+  const inputSheet = ss.getSheetByName('Performer Schedule Input');
+  const { performances, allPerformers } = getInputData(inputSheet);
+
+  const nameMap = {};
+  performances.forEach(p => nameMap[p.name] = p);
+
+  const scheduled = performanceNames.map(n => nameMap[n]).filter(Boolean);
+  return calculateViolationScore(scheduled, allPerformers, 1);
+}
